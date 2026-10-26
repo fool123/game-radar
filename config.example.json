@@ -2,6 +2,8 @@
   "collection": {
     "request_timeout": 8,
     "max_requests": 15,
+    "reference_max_requests": 10,
+    "review_max_requests": 4,
     "max_candidates": 60
   }
 }

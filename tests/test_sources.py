@@ -107,7 +107,7 @@ class SourceTests(unittest.TestCase):
 
     def test_bounds_request_count_and_reports_truncated_coverage(self):
         with patch('radar.sources._fetch_text', return_value=SEARCH) as network:
-            result = sources.collect({'max_requests': 1}, [], NOW)
+            result = sources.collect({'max_requests': 1, 'review_max_requests': 0}, [], NOW)
         self.assertLessEqual(network.call_count, 1)
         self.assertTrue(any(s['status'] in ('failed', 'partial') for s in result['sources']))
 
@@ -120,7 +120,7 @@ class SourceTests(unittest.TestCase):
     def test_source_counts_unique_projects_and_keeps_collection_source(self):
         with patch('radar.sources._fetch_text', return_value=SEARCH):
             result = sources.collect({'max_requests': 3}, [], NOW)
-        self.assertEqual(result['sources'][0]['count'], 1)
+        self.assertEqual(next(s for s in result['sources'] if s['name']=='Steam 公开发现')['count'], 1)
         self.assertEqual(result['projects'][0]['collection_source'], 'Steam 公开发现')
 
     def test_redirect_to_private_host_never_connects(self):
@@ -184,6 +184,61 @@ class SourceTests(unittest.TestCase):
     def test_maker_unrecognized_title_structure_does_not_guess_from_badges(self):
         with self.assertRaises(ValueError):
             sources._maker('<a href="/app/123">共命战线<span>测试</span>创意工坊</a>', NOW)
+
+    def test_platform_slots_reference_verification_and_review_budget_are_independent(self):
+        calls=[]
+        search=''.join(SEARCH.replace('123',str(i)) for i in range(100,130))
+        maker='<a href="/app/777"><div class="app-title"><meta itemprop="name" content="Maker Game"></div></a>'
+        seeds=[{'url':f'https://store.steampowered.com/app/{i}/'} for i in [5245810,*range(900,909)]]
+        def fetch(url, **kwargs):
+            calls.append(url)
+            if url==sources.ITCH_FEED:return RSS
+            if url==sources.MAKER_DIRECTORY:return maker
+            if '/search/' in url:return search
+            if '/appdetails?' in url:
+                app=parse_qs(urlsplit(url).query)['appids'][0]
+                return json.dumps({app:{'success':True,'data':{'name':'Reference '+app,'type':'game'}}})
+            if '/GetAppReviews/' in url:return json.dumps({'response':{'reviews':[{'review':'Fun but short'}]}})
+            raise AssertionError(url)
+        with patch('radar.sources._fetch_text', side_effect=fetch):
+            result=sources.collect({'max_requests':5,'max_candidates':6},seeds,NOW)
+        new=[p for p in result['projects'] if p['discovery']!='seed']
+        self.assertEqual(sum(p['source']=='Steam' for p in new),2)
+        self.assertTrue(any(p['source']=='itch.io' for p in new))
+        self.assertTrue(any(p['id']=='taptap:777' for p in new))
+        self.assertEqual(sum(p['discovery']=='seed' for p in result['projects']),10)
+        forge=next(p for p in result['projects'] if p['id']=='steam:5245810')
+        self.assertEqual(forge['review_sample']['status'],'ok')
+        self.assertEqual(calls[0],sources.ITCH_FEED)
+        self.assertEqual(calls[1],sources.MAKER_DIRECTORY)
+        self.assertEqual(sum('/GetAppReviews/' in u for u in calls),2)
+
+    def test_comment_budget_exhaustion_is_distinct_from_network_timeout(self):
+        def fetch(url, **kwargs):
+            if '/search/' in url:return SEARCH
+            raise OSError('unavailable')
+        with patch('radar.sources._fetch_text',side_effect=fetch):
+            result=sources.collect({'review_max_requests':0},[],NOW)
+        row=next(p for p in result['projects'] if p['id']=='steam:123')
+        self.assertIn('BudgetExhausted',row['review_sample']['error'])
+
+    def test_expired_discovery_deadline_does_not_expire_reference_or_comments(self):
+        clock=[0.0]
+        def fetch(url,**kwargs):
+            if url==sources.ITCH_FEED:
+                clock[0]=100.0
+                return RSS
+            if '/appdetails?' in url:
+                self.assertGreater(kwargs['deadline'],clock[0])
+                return json.dumps({'5245810':{'success':True,'data':{'name':'ForgeTax','type':'game'}}})
+            if '/GetAppReviews/' in url:
+                self.assertGreater(kwargs['deadline'],clock[0])
+                return json.dumps({'response':{'reviews':[]}})
+            raise AssertionError('Expired discovery must not send another request')
+        with patch('radar.sources.time.monotonic',side_effect=lambda:clock[0]),patch('radar.sources._fetch_text',side_effect=fetch):
+            result=sources.collect({},[{'url':'https://store.steampowered.com/app/5245810/'}],NOW)
+        forge=next(p for p in result['projects'] if p['id']=='steam:5245810')
+        self.assertEqual(forge['review_sample']['status'],'ok')
 
 
 if __name__ == '__main__':

@@ -20,6 +20,10 @@ ITCH_FEED = 'https://itch.io/feed/new.xml'
 MAKER_DIRECTORY = 'https://www.taptap.cn/tag/TapTap%E5%88%B6%E9%80%A0?sort=updated'
 
 
+class BudgetExhausted(TimeoutError):
+    """Local scheduling limit, not a remote network timeout."""
+
+
 def normalize_url(url):
     if not isinstance(url, str) or len(url) > 4096 or re.search(r'[\x00-\x20\\\x7f]', url):
         raise ValueError('网址含无效字符')
@@ -105,7 +109,7 @@ def _fetch_text(url, timeout=8, deadline=None, redirect_hook=None):
             redirect_hook()
         remaining = min(timeout, deadline - time.monotonic())
         if remaining <= 0:
-            raise TimeoutError('采集时间预算已用尽')
+            raise BudgetExhausted('采集时间预算已用尽')
         host, address = _network_target(url)
         p = urlsplit(url)
         target = quote(p.path or '/', safe='/%:@!$&\'()*+,;=-._~')
@@ -129,7 +133,7 @@ def _fetch_text(url, timeout=8, deadline=None, redirect_hook=None):
             while True:
                 remaining = min(timeout, deadline - time.monotonic())
                 if remaining <= 0:
-                    raise TimeoutError('采集时间预算已用尽')
+                    raise BudgetExhausted('采集时间预算已用尽')
                 if conn.sock:
                     conn.sock.settimeout(remaining)
                 chunk = response.read(65536)
@@ -360,8 +364,16 @@ def collect(config, seeds, now=None):
     timeout = max(1, min(float(config.get('request_timeout', 8)), 15))
     maximum = max(1, min(int(config.get('max_requests', 15)), 20))
     limit = max(1, min(int(config.get('max_candidates', 60)), 100))
-    deadline = time.monotonic() + min(85, timeout * maximum)
-    requests = 0
+    budgets = {
+        '发现': {'maximum': maximum, 'seconds': min(85, timeout * maximum)},
+        '参考核验': {'maximum': max(0,min(int(config.get('reference_max_requests',10)),20)), 'seconds': 85},
+        '评论': {'maximum': max(0,min(int(config.get('review_max_requests',4)),8)), 'seconds': 40},
+    }
+    for budget in budgets.values():budget.update(requests=0,deadline=None)
+    active_budget = budgets['发现']
+    # Reserve equal platform slots; reference records never consume these slots.
+    quotas = dict(zip(('Steam 公开发现','itch.io RSS','TapTap Maker 目录'),
+                      (limit//3+(limit%3>0),limit//3+(limit%3>1),limit//3)))
     projects, statuses = {}, []
     reference_ids = set()
     for seed in seeds:
@@ -371,17 +383,18 @@ def collect(config, seeds, now=None):
             pass
 
     def claim_request():
-        nonlocal requests
-        if requests >= maximum or time.monotonic() >= deadline:
-            raise TimeoutError('本次请求/时间预算已用尽，覆盖已截断')
-        requests += 1
+        if active_budget['deadline'] is None:
+            active_budget['deadline']=time.monotonic()+active_budget['seconds']
+        if active_budget['requests'] >= active_budget['maximum'] or time.monotonic() >= active_budget['deadline']:
+            raise BudgetExhausted('本阶段独立请求/时间额度已用尽，覆盖已截断')
+        active_budget['requests'] += 1
 
     def fetch(url):
         claim_request()
-        return _fetch_text(url, timeout=timeout, deadline=deadline, redirect_hook=claim_request)
+        return _fetch_text(url, timeout=timeout, deadline=active_budget['deadline'], redirect_hook=claim_request)
 
     def run(name, tasks):
-        ids, errors, succeeded = set(), [], 0
+        ids, errors, succeeded, truncated = set(), [], 0, False
         for task in tasks:
             try:
                 rows = task()
@@ -390,8 +403,11 @@ def collect(config, seeds, now=None):
                     row['collection_source'] = name
                     if row['id'] in reference_ids:
                         row['discovery'] = 'seed'
-                    if row['id'] not in projects and len(projects) >= limit:
-                        continue
+                    if row['id'] not in projects and row['discovery'] != 'seed':
+                        admitted=sum(p['discovery']!='seed' and p.get('collection_source')==name for p in projects.values())
+                        if admitted >= quotas.get(name,0):
+                            truncated=True
+                            continue
                     previous = projects.get(row['id'])
                     if previous and row['discovery'] != 'seed':
                         previous['evidence'].extend(row['evidence'])
@@ -402,8 +418,10 @@ def collect(config, seeds, now=None):
                 # Do not expose URLs/credentials from arbitrary exception text.
                 errors.append(type(exc).__name__ + ': ' + str(exc)[:200])
         status = 'partial' if errors and succeeded else ('failed' if errors else 'ok')
+        if truncated and status=='ok':status='partial'
         statuses.append({'name': name, 'status': status, 'count': len(ids), 'checked_at': now,
-                         'message': ('；'.join(errors) if errors else '有范围公开采集成功；非全站或完整历史')})
+                         'message': ('；'.join(errors) if errors else '有范围公开采集成功；非全站或完整历史')
+                         + (f'；已达该平台 {quotas[name]} 个新候选名额，其他平台名额不挪用' if truncated else '')})
 
     searches = [('demo', {'category1': '10', 'sort_by': 'Released_DESC'}),
                 ('unknown', {'filter': 'comingsoon', 'sort_by': 'Release_ASC', 'category1': '998'}),
@@ -412,10 +430,11 @@ def collect(config, seeds, now=None):
     for stage, params in searches:
         url = 'https://store.steampowered.com/search/?' + urlencode({**params, 'count': 20, 'ignore_preferences': 1, 'l': 'english', 'cc': 'us'})
         tasks.append(lambda url=url, stage=stage: parse_steam_search(fetch(url), url, now, stage))
-    run('Steam 公开发现', tasks)
     run('itch.io RSS', [lambda: parse_itch_rss(fetch(ITCH_FEED), ITCH_FEED, now)])
     run('TapTap Maker 目录', [lambda: _maker(fetch(MAKER_DIRECTORY), now)])
+    run('Steam 公开发现', tasks)
 
+    active_budget = budgets['参考核验']
     seed_tasks = []
     for seed in seeds[:10]:
         try:
@@ -446,6 +465,7 @@ def collect(config, seeds, now=None):
             continue
     if seed_tasks:
         run('参考种子核验', seed_tasks)
+    active_budget = budgets['评论']
     review_projects = sorted((p for p in projects.values() if p['id'].startswith('steam:')),
                              key=lambda p: p['id'] != 'steam:5245810')[:2]
     review_errors, review_count = [], 0
