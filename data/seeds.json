@@ -1,0 +1,13 @@
+[
+  {"title":"我带过的最差一届 / Worst Class Ever","url":"https://store.steampowered.com/app/5175310/","source":"Steam","stage":"demo","role":"reference","summary":"参考机制：学生混入 NPC、冒险行动与老师识别之间的对抗；公开 Demo 与本体分开核查。","tags":["行为伪装","非对称对抗","社交故事"]},
+  {"title":"ForgeTax","url":"https://store.steampowered.com/app/5245810/","source":"Steam","stage":"released","role":"reference","summary":"参考机制：锻造升值、碎裂风险与收手取舍。用户提出传播好、内容少的边界判断；评论归因需另行采样。","tags":["风险奖励","数值构筑","可视化反转"]},
+  {"title":"MECCHA CHAMELEON","url":"https://store.steampowered.com/app/4704690/","source":"Steam","stage":"released","role":"reference","summary":"参考机制：自绘身体伪装、隐藏与被识破；观众也可以参与猜测。","tags":["玩家创作","视觉伪装","观众参与"]},
+  {"title":"Librarian: Tidy Up the Arcane Library!","url":"https://store.steampowered.com/app/4197610/","source":"Steam","stage":"released","role":"reference","summary":"参考机制：书籍归位、秩序恢复与魔法提效；区分内容量不足和重复劳动无变化。","tags":["秩序修复","效率成长","直观反馈"]},
+  {"title":"渔力全开 / How to Fish","url":"https://store.steampowered.com/app/4001890/","source":"Steam","stage":"unknown","role":"reference","summary":"用户参考案例：熟悉的钓鱼行为结合物理互动与多人关系，观察普通玩家能否持续制造故事。","tags":["物理互动","多人关系","社交故事"]},
+  {"title":"蒲公英不屈。 / The Dandelion Endures.","url":"https://store.steampowered.com/app/4368560/","source":"Steam","stage":"unknown","role":"reference","summary":"用户参考案例：特殊身份与直观遭遇形成观看钩子；仍需核查玩家主动选择与实际趣味。","tags":["特殊身份","直观反馈","成长"]},
+  {"title":"Leaf it Alone","url":"https://store.steampowered.com/app/3981100/","source":"Steam","stage":"unknown","role":"reference","summary":"用户参考案例：整理落叶的可见进度、效率提升与前后对比；不是所有重复劳动都成立。","tags":["秩序修复","效率成长","直观反馈"]},
+  {"title":"Big Walk","url":"https://store.steampowered.com/app/1478500/","source":"Steam","stage":"unknown","role":"reference","summary":"用户参考案例：沟通方式与工具成为协作玩法，制造误会、发现和共同经历。","tags":["合作","信息差","沟通机制"]},
+  {"title":"BOMBANANA!","url":"https://store.steampowered.com/app/4656000/","source":"Steam","stage":"unknown","role":"reference","summary":"用户参考案例：三只猴子的信息、表达和操作能力不同，拆弹倒计时放大协作决策。","tags":["合作","信息差","限时决策"]},
+  {"title":"五秒方块","url":"https://www.taptap.cn/app/864926","source":"TapTap Maker","stage":"demo","role":"reference","summary":"站外覆盖样例：在五秒内作出选择、推动战斗与成长；仅有作品页资料，尚非高潜结论。","tags":["限时决策","成长反馈"]},
+  {"title":"Hearthvale — Early Development Test","url":"https://arderkuu.itch.io/hearthvale","source":"itch.io","stage":"prototype","role":"reference","summary":"站外覆盖样例：开发者标注早期 Prototype 测试；需另查实机与独特机制，不视为 Demo 或高潜推荐。","tags":["多人探索","开发中"]}
+]

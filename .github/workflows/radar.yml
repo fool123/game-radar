@@ -1,0 +1,113 @@
+name: Daily game radar
+on:
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+  issues:
+    types: [opened, edited, closed, reopened]
+
+concurrency:
+  group: game-radar-cloud
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: read
+  pages: write
+  id-token: write
+
+jobs:
+  research-and-publish:
+    # Public visitors cannot trigger secret-bearing research through an issue.
+    if: github.event_name != 'issues' || github.actor == github.repository_owner || contains(fromJSON(vars.RADAR_EDITOR_LOGINS_JSON || '[]'), github.actor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+      RADAR_EDITORS: ${{ vars.RADAR_EDITORS }}
+      RADAR_AUTO_SEND: ${{ vars.RADAR_AUTO_SEND }}
+      RADAR_FEISHU_MODE: ${{ vars.RADAR_FEISHU_MODE || 'webhook' }}
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify application
+        run: python -m unittest discover -s tests -q
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Load persistent cloud state
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if git ls-remote --exit-code --heads origin cloud-state >/dev/null; then
+            git fetch origin cloud-state
+            git worktree add --detach "$RUNNER_TEMP/radar-state" FETCH_HEAD
+          else
+            result=$?
+            if [ "$result" -ne 2 ]; then exit "$result"; fi
+            git worktree add --detach "$RUNNER_TEMP/radar-state"
+            git -C "$RUNNER_TEMP/radar-state" switch --orphan cloud-state
+          fi
+      - name: Collect, analyze and claim final report
+        id: prepare
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RADAR_PUBLIC_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "$EVENT_NAME" = issues ]; then args+=(--feedback-only); fi
+          python -m radar.cloud prepare --state "$RUNNER_TEMP/radar-state/radar.sqlite3" "${args[@]}"
+      - name: Commit report and send claim before delivery
+        id: checkpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C "$RUNNER_TEMP/radar-state" add -- radar.sqlite3
+          if ! git -C "$RUNNER_TEMP/radar-state" diff --cached --quiet; then
+            git -C "$RUNNER_TEMP/radar-state" commit -m 'Save research and delivery claim'
+          fi
+          git -C "$RUNNER_TEMP/radar-state" push origin HEAD:refs/heads/cloud-state
+      - name: Deliver claimed report once
+        env:
+          RADAR_PUBLIC_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: python -m radar.cloud send --claim-committed --state "$RUNNER_TEMP/radar-state/radar.sqlite3"
+      - name: Persist delivery result
+        if: always() && steps.checkpoint.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/radar-state/radar.sqlite3" ]; then
+            git -C "$RUNNER_TEMP/radar-state" add -- radar.sqlite3
+            if ! git -C "$RUNNER_TEMP/radar-state" diff --cached --quiet; then
+              git -C "$RUNNER_TEMP/radar-state" commit -m 'Save delivery outcome'
+              git -C "$RUNNER_TEMP/radar-state" push origin HEAD:refs/heads/cloud-state
+            fi
+          fi
+      - name: Build public website
+        run: python -m radar.cloud publish --output site
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
